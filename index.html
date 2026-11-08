@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Landscape Ecology: The Canopy Buffer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #0f172a; font-family: 'Inter', sans-serif; color: white; }
+        #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 0; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; padding: 1.5rem; z-index: 10; }
+        .pointer-events-auto { pointer-events: auto; }
+        .glass-panel { background: rgba(15, 23, 42, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 1rem; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); }
+        
+        /* Custom range slider */
+        input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 16px; width: 16px; border-radius: 50%; background: #fbbf24; cursor: pointer; margin-top: -6px; box-shadow: 0 0 10px rgba(251, 191, 36, 0.8); }
+        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 4px; cursor: pointer; background: rgba(255,255,255,0.2); border-radius: 2px; }
+        
+        .fade-in { animation: fadeIn 0.3s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        /* Soil Profile CSS */
+        .soil-layer { transition: height 0.5s ease; width: 100%; }
+        .horizon-o { background: #1a0f0a; } /* Leaf litter */
+        .horizon-a { background: #3d2314; } /* Dark topsoil */
+        .horizon-b { background: #8c5a35; } /* Subsoil / weathered rock */
+    </style>
+    <!-- Import Three.js as an ES module -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <!-- 3D Canvas -->
+    <div id="canvas-container"></div>
+
+    <!-- UI Overlay -->
+    <div id="ui-layer">
+        
+        <!-- Header & Controls -->
+        <div class="flex justify-between items-start w-full">
+            <div class="glass-panel p-6 max-w-sm pointer-events-auto">
+                <h1 class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-emerald-400 to-cyan-400 mb-2">The Canopy Buffer</h1>
+                <p class="text-sm text-slate-300 mb-4 border-b border-slate-700 pb-4">
+                    Interactive 3D field experiment simulation testing the linkages between topography, canopy density, and soil microclimate.
+                </p>
+                
+                <div class="mb-4">
+                    <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Simulate Sun Path</label>
+                    <div class="flex items-center gap-3">
+                        <span class="text-xl">🌅</span>
+                        <input type="range" id="timeSlider" min="0" max="100" value="50" class="flex-grow">
+                        <span class="text-xl">🌇</span>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Environmental Controls</label>
+                    <button id="rainToggle" class="w-full py-2 px-4 rounded-lg bg-slate-800 hover:bg-blue-900/50 border border-slate-700 hover:border-blue-500 transition-colors flex justify-center items-center gap-2">
+                        <span id="rainIcon">🌧️</span> <span id="rainText">Start Precipitation</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Site Selection Hint -->
+            <div class="glass-panel p-4 pointer-events-auto flex flex-col gap-2">
+                <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider text-center">Select a Field Site</div>
+                <button class="site-btn px-4 py-2 rounded bg-slate-800 hover:bg-slate-700 border border-slate-600 transition" data-site="0">Site A (Extreme)</button>
+                <button class="site-btn px-4 py-2 rounded bg-slate-800 hover:bg-slate-700 border border-slate-600 transition" data-site="1">Site B (Buffer)</button>
+                <button class="site-btn px-4 py-2 rounded bg-slate-800 hover:bg-slate-700 border border-slate-600 transition" data-site="2">Site C (Sheltered)</button>
+            </div>
+        </div>
+
+        <!-- Dynamic Information Panel (Bottom) -->
+        <div id="infoPanel" class="glass-panel p-6 pointer-events-auto w-full max-w-4xl mx-auto hidden fade-in flex gap-6">
+            
+            <!-- Context -->
+            <div class="flex-1">
+                <div class="flex items-center gap-3 mb-2">
+                    <span id="siteBadge" class="px-2 py-1 rounded text-xs font-bold uppercase tracking-wide bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Site A</span>
+                    <h2 id="siteName" class="text-xl font-bold">South-Facing Convex (Open)</h2>
+                </div>
+                <p id="siteDesc" class="text-sm text-slate-300 mb-4 line-clamp-3">Description goes here.</p>
+                
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="bg-slate-800/50 p-3 rounded-lg border border-slate-700/50">
+                        <div class="text-xs text-slate-400 mb-1">Simulated Soil Temp</div>
+                        <div id="tempVal" class="text-2xl font-mono text-amber-400">--°C</div>
+                    </div>
+                    <div class="bg-slate-800/50 p-3 rounded-lg border border-slate-700/50">
+                        <div class="text-xs text-slate-400 mb-1">Soil Moisture</div>
+                        <div id="moistureVal" class="text-2xl font-mono text-blue-400">--%</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Soil Core Vis -->
+            <div class="w-48 bg-slate-900 rounded-lg p-3 border border-slate-700 flex flex-col justify-end relative overflow-hidden">
+                <div class="absolute top-2 left-0 w-full text-center text-[10px] text-slate-400 font-bold tracking-widest z-10">AUGER CORE SAMPLE</div>
+                
+                <!-- Soil Layers -->
+                <div class="flex flex-col h-40 mt-6 rounded overflow-hidden border border-slate-800 shadow-inner">
+                    <div id="layerO" class="soil-layer horizon-o flex items-center justify-center text-[8px] text-white/50" style="height: 5%;">O-Hor</div>
+                    <div id="layerA" class="soil-layer horizon-a flex items-center justify-center text-[8px] text-white/50" style="height: 15%;">A-Hor (Topsoil)</div>
+                    <div id="layerB" class="soil-layer horizon-b flex items-center justify-center text-[8px] text-white/50" style="height: 80%;">B-Hor (Subsoil)</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Application Logic -->
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // --- SCENE SETUP ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color('#0f172a');
+        scene.fog = new THREE.FogExp2('#0f172a', 0.015);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(40, 30, 40);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        container.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.maxPolarAngle = Math.PI / 2 - 0.05; // Don't go below ground
+        controls.minDistance = 10;
+        controls.maxDistance = 100;
+
+        // --- LIGHTING (The Sun) ---
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.2); // Low baseline to emphasize shadows
+        scene.add(ambientLight);
+
+        const sunLight = new THREE.DirectionalLight(0xfff5b6, 1.5);
+        sunLight.castShadow = true;
+        sunLight.shadow.mapSize.width = 2048;
+        sunLight.shadow.mapSize.height = 2048;
+        sunLight.shadow.camera.near = 0.5;
+        sunLight.shadow.camera.far = 150;
+        const d = 30;
+        sunLight.shadow.camera.left = -d;
+        sunLight.shadow.camera.right = d;
+        sunLight.shadow.camera.top = d;
+        sunLight.shadow.camera.bottom = -d;
+        scene.add(sunLight);
+
+        // Visual Sun Sphere
+        const sunGeo = new THREE.SphereGeometry(2, 16, 16);
+        const sunMat = new THREE.MeshBasicMaterial({ color: 0xffe873 });
+        const sunMesh = new THREE.Mesh(sunGeo, sunMat);
+        scene.add(sunMesh);
+
+        // --- TERRAIN GENERATION & EROSION LOGIC (Hypothesis core) ---
+        // Z > 0 is South (Convex). Z < 0 is North (Concave).
+        const terrainSize = 60;
+        
+        // Mathematical modeling of the landscape heights
+        function getTerrainY(x, z) {
+            let y = 0;
+            const zNorm = Math.abs(z) / (terrainSize/2); 
+            if (z > 0) {
+                // South Face: Convex (Bulging outwards, prone to erosion)
+                y = 12 * (1 - Math.pow(zNorm, 1.5));
+            } else {
+                // North Face: Concave (Bowl shaped, prone to accumulation)
+                y = 12 * Math.pow((1 - zNorm), 2.5);
+            }
+            // Add some natural noise
+            y += Math.sin(x * 0.5) * Math.cos(z * 0.5) * 0.5;
+            return y;
+        }
+
+        const terrainGeo = new THREE.PlaneGeometry(terrainSize, terrainSize, 100, 100);
+        terrainGeo.rotateX(-Math.PI / 2);
+        
+        const pos = terrainGeo.attributes.position;
+        for (let i = 0; i < pos.count; i++) {
+            let x = pos.getX(i);
+            let z = pos.getZ(i);
+            pos.setY(i, getTerrainY(x, z));
+        }
+        terrainGeo.computeVertexNormals();
+
+        // Custom material to show "dry" south vs "moist" north
+        const terrainMat = new THREE.MeshStandardMaterial({ 
+            color: 0x4a5d23, // Base olive green
+            roughness: 0.9,
+            metalness: 0.1
+        });
+        
+        const terrain = new THREE.Mesh(terrainGeo, terrainMat);
+        terrain.receiveShadow = true;
+        scene.add(terrain);
+
+        // --- VEGETATION (The Buffer) ---
+        const treeGroups = [];
+        
+        function createTree(x, z, scale = 1, isConiferous = false) {
+            const group = new THREE.Group();
+            
+            // Trunk
+            const trunkGeo = new THREE.CylinderGeometry(0.2*scale, 0.3*scale, 2*scale, 5);
+            const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3b2c });
+            const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+            trunk.position.y = scale;
+            trunk.castShadow = true;
+            trunk.receiveShadow = true;
+            group.add(trunk);
+
+            // Canopy
+            let canopyGeo;
+            if(isConiferous) {
+                canopyGeo = new THREE.ConeGeometry(1.5*scale, 4*scale, 7);
+                canopyGeo.translate(0, 3*scale, 0);
+            } else {
+                canopyGeo = new THREE.SphereGeometry(1.8*scale, 7, 7);
+                canopyGeo.translate(0, 2.5*scale, 0);
+                // Squish it a bit
+                canopyGeo.scale(1, 0.8, 1);
+            }
+            
+            const canopyMat = new THREE.MeshStandardMaterial({ 
+                color: isConiferous ? 0x1e3f20 : 0x2d4c1e,
+                roughness: 0.8
+            });
+            const canopy = new THREE.Mesh(canopyGeo, canopyMat);
+            canopy.castShadow = true;
+            canopy.receiveShadow = true;
+            group.add(canopy);
+
+            // Find terrain Y height at (x,z)
+            // Raycast down to find exact height
+            const raycaster = new THREE.Raycaster();
+            raycaster.set(new THREE.Vector3(x, 20, z), new THREE.Vector3(0, -1, 0));
+            const intersects = raycaster.intersectObject(terrain);
+            if (intersects.length > 0) {
+                group.position.set(x, intersects[0].point.y, z);
+                scene.add(group);
+                treeGroups.push(group);
+            }
+        }
+
+        // Populate Site A (South/Convex) -> OPEN. Very few, stunted trees.
+        for(let i=0; i<3; i++) {
+            createTree(-12 + Math.random()*6, 10 + Math.random()*6, 0.6 + Math.random()*0.3, false);
+        }
+
+        // Populate Site B (South/Convex) -> DENSE. Many trees acting as buffer.
+        for(let i=0; i<25; i++) {
+            createTree(12 + Math.random()*8 - 4, 12 + Math.random()*8 - 4, 0.9 + Math.random()*0.4, false);
+        }
+
+        // Populate Site C (North/Concave) -> DENSE. Natural forest, large trees.
+        for(let i=0; i<35; i++) {
+            createTree(0 + Math.random()*20 - 10, -15 + Math.random()*8 - 4, 1.2 + Math.random()*0.5, true);
+        }
+
+        // --- SENSORS / LOGGERS ---
+        const sites = [
+            { id: 0, name: "Site A", desc: "South-Facing, Convex (Erosion Zone). Open Canopy. Extreme exposure to solar radiation and rapid moisture loss.", pos: new THREE.Vector3(-12, 0, 12), data: { temp: 0, moisture: 10, soilA: 5, soilO: 2 } },
+            { id: 1, name: "Site B", desc: "South-Facing, Convex. Dense Canopy. Testing if biological structures (trees) can buffer the geographical extremes of the south slope.", pos: new THREE.Vector3(12, 0, 12), data: { temp: 0, moisture: 30, soilA: 15, soilO: 10 } },
+            { id: 2, name: "Site C", desc: "North-Facing, Concave (Accumulation Zone). Dense Canopy. Naturally sheltered baseline with deep organic matter accumulation.", pos: new THREE.Vector3(0, 0, -15), data: { temp: 0, moisture: 60, soilA: 40, soilO: 15 } }
+        ];
+
+        const markers = [];
+        const markerGeo = new THREE.CylinderGeometry(0.2, 0.2, 2, 8);
+        const markerMat = new THREE.MeshStandardMaterial({ color: 0xff3333, emissive: 0xaa0000 });
+
+        sites.forEach((site, index) => {
+            // Find ground level
+            const rc = new THREE.Raycaster(new THREE.Vector3(site.pos.x, 20, site.pos.z), new THREE.Vector3(0,-1,0));
+            const hits = rc.intersectObject(terrain);
+            if(hits.length > 0) {
+                site.pos.y = hits[0].point.y;
+                
+                const mesh = new THREE.Mesh(markerGeo, markerMat);
+                mesh.position.copy(site.pos);
+                mesh.position.y += 1; // half height
+                mesh.userData = { siteIndex: index };
+                scene.add(mesh);
+                markers.push(mesh);
+
+                // Add a glowing ring indicator
+                const ringGeo = new THREE.RingGeometry(1, 1.2, 16);
+                const ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: 0.5 });
+                const ring = new THREE.Mesh(ringGeo, ringMat);
+                ring.rotation.x = -Math.PI / 2;
+                ring.position.copy(site.pos);
+                ring.position.y += 0.1;
+                scene.add(ring);
+                site.ring = ring;
+            }
+        });
+
+        // --- RAIN SIMULATION ---
+        let isRaining = false;
+        const rainCount = 1500;
+        const rainGeo = new THREE.BufferGeometry();
+        const rainPos = new Float32Array(rainCount * 3);
+        const rainVel = [];
+        
+        for(let i=0; i<rainCount; i++) {
+            rainPos[i*3] = (Math.random() - 0.5) * terrainSize;
+            rainPos[i*3+1] = Math.random() * 40 + 10;
+            rainPos[i*3+2] = (Math.random() - 0.5) * terrainSize;
+            rainVel.push(-0.5 - Math.random()*0.5); // fall speed
+        }
+        rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
+        const rainMat = new THREE.PointsMaterial({ color: 0xaaaaff, size: 0.1, transparent: true, opacity: 0.6 });
+        const rainSystem = new THREE.Points(rainGeo, rainMat);
+        rainSystem.visible = false;
+        scene.add(rainSystem);
+
+        // --- SOIL EROSION & FLOW SYSTEM ---
+        const flowCount = 2500;
+        const flowGeo = new THREE.BufferGeometry();
+        const flowPos = new Float32Array(flowCount * 3);
+        const flowLife = new Float32Array(flowCount);
+        const flowColor = new Float32Array(flowCount * 3);
+        
+        function initFlowParticle(i) {
+            const x = (Math.random() - 0.5) * 58;
+            const z = (Math.random() - 0.5) * 58;
+            const y = getTerrainY(x, z) + 0.15; // Hover slightly above ground
+            
+            flowPos[i*3] = x;
+            flowPos[i*3+1] = y;
+            flowPos[i*3+2] = z;
+            flowLife[i] = Math.random();
+            
+            // Color based on zone (Muddy erosion vs Dark rich accumulation)
+            const color = new THREE.Color();
+            if (z > 0) {
+                color.setHex(0x8B4513); // SaddleBrown - Erosion
+            } else {
+                color.setHex(0x3d2314); // Dark topsoil - Accumulation
+            }
+            flowColor[i*3] = color.r;
+            flowColor[i*3+1] = color.g;
+            flowColor[i*3+2] = color.b;
+        }
+
+        for(let i=0; i<flowCount; i++) initFlowParticle(i);
+        
+        flowGeo.setAttribute('position', new THREE.BufferAttribute(flowPos, 3));
+        flowGeo.setAttribute('color', new THREE.BufferAttribute(flowColor, 3));
+        flowGeo.setAttribute('life', new THREE.BufferAttribute(flowLife, 1));
+        
+        const flowMat = new THREE.PointsMaterial({ size: 0.25, vertexColors: true, transparent: true, opacity: 0.8 });
+        const flowSystem = new THREE.Points(flowGeo, flowMat);
+        flowSystem.visible = false;
+        scene.add(flowSystem);
+        
+        // Dynamics Badge UI
+        const dynamicsBadge = document.createElement('div');
+        dynamicsBadge.className = 'absolute top-28 right-6 glass-panel p-4 max-w-xs fade-in hidden z-50 pointer-events-none';
+        dynamicsBadge.innerHTML = `
+            <h3 class="text-sm font-bold text-blue-400 mb-2 border-b border-slate-700 pb-1">💧 Erosion Dynamics Active</h3>
+            <p class="text-[11px] text-slate-300 space-y-2 leading-tight">
+                <span class="block"><strong class="text-amber-500">Site A (Open):</strong> Severe surface runoff & soil transport down convex slope.</span>
+                <span class="block"><strong class="text-emerald-400">Site B (Buffer):</strong> Canopy & roots physically trap moving soil, slowing erosion by 90%.</span>
+                <span class="block"><strong class="text-blue-300">Site C (Sheltered):</strong> Concave catchment area accumulates rich runoff, building deep A-horizon.</span>
+            </p>
+        `;
+        document.getElementById('ui-layer').appendChild(dynamicsBadge);
+
+        // --- INTERACTION & UI ---
+        let selectedSiteIndex = -1;
+        let targetCameraPos = new THREE.Vector3();
+        let targetControlsTarget = new THREE.Vector3();
+        let isMovingCamera = false;
+
+        const infoPanel = document.getElementById('infoPanel');
+        const siteBadge = document.getElementById('siteBadge');
+        const siteName = document.getElementById('siteName');
+        const siteDesc = document.getElementById('siteDesc');
+        const tempVal = document.getElementById('tempVal');
+        const moistureVal = document.getElementById('moistureVal');
+        
+        const layerO = document.getElementById('layerO');
+        const layerA = document.getElementById('layerA');
+        const layerB = document.getElementById('layerB');
+
+        // Buttons
+        document.querySelectorAll('.site-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const idx = parseInt(e.target.dataset.site);
+                selectSite(idx);
+            });
+        });
+
+        // Raycasting for 3D clicks
+        const mouse = new THREE.Vector2();
+        const clickRaycaster = new THREE.Raycaster();
+        
+        window.addEventListener('click', (e) => {
+            // Don't trigger if clicking UI
+            if(e.target.closest('.glass-panel')) return;
+
+            mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+            clickRaycaster.setFromCamera(mouse, camera);
+
+            const intersects = clickRaycaster.intersectObjects(markers);
+            if(intersects.length > 0) {
+                const idx = intersects[0].object.userData.siteIndex;
+                selectSite(idx);
+            }
+        });
+
+        function selectSite(index) {
+            selectedSiteIndex = index;
+            const site = sites[index];
+
+            // Animate Camera
+            targetControlsTarget.copy(site.pos);
+            
+            // Position camera slightly offset and looking at the marker
+            const offset = new THREE.Vector3(10, 8, 10);
+            if(site.pos.z < 0) offset.z = -10; // Adjust for North slope
+            targetCameraPos.copy(site.pos).add(offset);
+            isMovingCamera = true;
+
+            // Update UI
+            infoPanel.classList.remove('hidden');
+            infoPanel.classList.remove('fade-in');
+            void infoPanel.offsetWidth; // trigger reflow
+            infoPanel.classList.add('fade-in');
+
+            siteBadge.textContent = `Site ${String.fromCharCode(65 + index)}`;
+            siteName.textContent = site.name;
+            siteDesc.textContent = site.desc;
+
+            // Update Soil Layers
+            layerO.style.height = `${site.data.soilO}%`;
+            layerA.style.height = `${site.data.soilA}%`;
+            layerB.style.height = `${100 - site.data.soilA - site.data.soilO}%`;
+
+            // Active button state
+            document.querySelectorAll('.site-btn').forEach((btn, i) => {
+                if(i === index) {
+                    btn.classList.replace('bg-slate-800', 'bg-emerald-600');
+                    btn.classList.replace('border-slate-600', 'border-emerald-400');
+                } else {
+                    btn.classList.replace('bg-emerald-600', 'bg-slate-800');
+                    btn.classList.replace('border-emerald-400', 'border-slate-600');
+                }
+            });
+            
+            updateSimulatedData();
+        }
+
+        // Toggle Rain
+        document.getElementById('rainToggle').addEventListener('click', (e) => {
+            isRaining = !isRaining;
+            rainSystem.visible = isRaining;
+            flowSystem.visible = isRaining;
+            
+            if (isRaining) {
+                dynamicsBadge.classList.remove('hidden');
+            } else {
+                dynamicsBadge.classList.add('hidden');
+            }
+            
+            const btn = e.currentTarget;
+            if(isRaining) {
+                btn.classList.add('bg-blue-900/50', 'border-blue-500');
+                btn.classList.remove('bg-slate-800', 'border-slate-700');
+                document.getElementById('rainText').textContent = "Stop Precipitation";
+                
+                // Increase moisture artificially
+                sites.forEach(s => s.data.moisture = Math.min(100, s.data.moisture + 25));
+            } else {
+                btn.classList.remove('bg-blue-900/50', 'border-blue-500');
+                btn.classList.add('bg-slate-800', 'border-slate-700');
+                document.getElementById('rainText').textContent = "Start Precipitation";
+            }
+            updateSimulatedData();
+        });
+
+        // Sun Slider
+        const timeSlider = document.getElementById('timeSlider');
+        
+        function updateSunPosition() {
+            // Slider 0 to 100 maps to angle.
+            // Morning (East) -> Noon (South/Top) -> Evening (West)
+            const val = parseInt(timeSlider.value);
+            const timeParam = (val / 100) * Math.PI; // 0 to PI
+            
+            // Path: Rises in X, arcs over in Y, leans heavily into +Z (South)
+            const radius = 40;
+            const x = Math.cos(timeParam) * radius * -1; // -X to +X
+            const y = Math.sin(timeParam) * radius;
+            const z = 20; // Sun is permanently biased to the South in Northern hemisphere autumn
+            
+            sunLight.position.set(x, y, z);
+            sunMesh.position.copy(sunLight.position);
+
+            updateSimulatedData();
+        }
+        
+        timeSlider.addEventListener('input', updateSunPosition);
+        // Initial set
+        updateSunPosition();
+
+
+        // Calculate real-time simulated data based on 3D geometry
+        function updateSimulatedData() {
+            if (selectedSiteIndex === -1) return;
+            const site = sites[selectedSiteIndex];
+
+            // 1. Raycast from Site to Sun to check for shadows (Canopy + Topography effect)
+            const dirToSun = new THREE.Vector3().subVectors(sunLight.position, site.pos).normalize();
+            
+            // Start ray slightly above ground to avoid self-intersection immediately
+            const rayStart = site.pos.clone().add(new THREE.Vector3(0, 0.5, 0));
+            const shadowRaycaster = new THREE.Raycaster(rayStart, dirToSun);
+            
+            // Test against terrain and trees
+            const obstacles = [terrain, ...treeGroups.map(g => g.children[1])]; // Check terrain and canopies
+            const hits = shadowRaycaster.intersectObjects(obstacles);
+
+            let isShaded = false;
+            if (hits.length > 0) {
+                // If the hit is closer than the sun (which is basically always if there's a hit)
+                isShaded = true;
+            }
+
+            // Calculate Base Temperature based on Sun Height (Time of day)
+            const maxTemp = 25; // Base max
+            const sunIntensity = Math.max(0, Math.sin((timeSlider.value / 100) * Math.PI));
+            let calculatedTemp = 5 + (maxTemp * sunIntensity);
+
+            // Apply Shading modifier
+            if (isShaded) {
+                calculatedTemp -= 8; // Cooler in shadow
+                site.ring.material.color.setHex(0x3b82f6); // Blue ring (cool)
+            } else {
+                // Direct sun baking
+                calculatedTemp += (site.id === 0 ? 5 : 0); // Extra hot for bare soil
+                site.ring.material.color.setHex(0xf59e0b); // Orange ring (hot)
+            }
+            
+            // North face baseline is always cooler
+            if(site.id === 2) calculatedTemp -= 4; 
+
+            // Moisture decay (if not raining)
+            if(!isRaining) {
+                // Decay faster if hotter and no canopy (Site A decays fastest)
+                const decayRate = (calculatedTemp / 100) * (site.id === 0 ? 2 : 0.5);
+                site.data.moisture = Math.max(5, site.data.moisture - decayRate);
+            }
+
+            // Update UI DOM
+            tempVal.textContent = calculatedTemp.toFixed(1) + " °C";
+            tempVal.className = `text-2xl font-mono ${calculatedTemp > 18 ? 'text-orange-400' : calculatedTemp < 10 ? 'text-blue-400' : 'text-emerald-400'}`;
+            
+            moistureVal.textContent = site.data.moisture.toFixed(0) + "%";
+        }
+
+
+        // --- ANIMATION LOOP ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Animate rings
+            const t = clock.getElapsedTime();
+            sites.forEach(site => {
+                if(site.ring) {
+                    site.ring.scale.setScalar(1 + Math.sin(t * 3) * 0.1);
+                }
+            });
+
+            // Camera animation to selected site
+            if (isMovingCamera) {
+                camera.position.lerp(targetCameraPos, 0.05);
+                controls.target.lerp(targetControlsTarget, 0.05);
+                if (camera.position.distanceTo(targetCameraPos) < 0.5) {
+                    isMovingCamera = false;
+                }
+            }
+
+            // Rain animation
+            if (isRaining) {
+                const positions = rainSystem.geometry.attributes.position.array;
+                for (let i = 0; i < rainCount; i++) {
+                    positions[i * 3 + 1] += rainVel[i];
+                    if (positions[i * 3 + 1] < 0) {
+                        positions[i * 3 + 1] = 40; // reset to top
+                    }
+                }
+                rainSystem.geometry.attributes.position.needsUpdate = true;
+
+                // Erosion Flow Animation (Gradient Descent)
+                const fPos = flowSystem.geometry.attributes.position.array;
+                const fLife = flowSystem.geometry.attributes.life.array;
+                const eps = 0.5;
+
+                for (let i = 0; i < flowCount; i++) {
+                    let x = fPos[i * 3];
+                    let z = fPos[i * 3 + 2];
+                    
+                    // Sample local slope (gradient)
+                    const h = getTerrainY(x, z);
+                    const hx = getTerrainY(x + eps, z);
+                    const hz = getTerrainY(x, z + eps);
+                    
+                    const dx = (hx - h) / eps;
+                    const dz = (hz - h) / eps;
+                    
+                    // Base speed based on slope steepness
+                    let speed = 0.2;
+
+                    // 🌳 THE CANOPY BUFFER EFFECT (The Science!)
+                    // Site B (Dense South): Roots & litter physically trap soil
+                    const distToB = Math.sqrt(Math.pow(x - 12, 2) + Math.pow(z - 12, 2));
+                    if (distToB < 6) speed *= 0.1; 
+                    
+                    // Site C (Dense North): Accumulation pooling in the concave bowl
+                    const distToC = Math.sqrt(Math.pow(x - 0, 2) + Math.pow(z + 15, 2));
+                    if (distToC < 10) speed *= 0.05; 
+                    
+                    // Move particle downhill
+                    x -= dx * speed;
+                    z -= dz * speed;
+                    let y = getTerrainY(x, z) + 0.15;
+                    
+                    fLife[i] -= (0.005 + Math.random() * 0.01);
+                    
+                    // Respawn if life ends or falls off the world edge
+                    if (fLife[i] <= 0 || Math.abs(x) > 29 || Math.abs(z) > 29) {
+                        initFlowParticle(i);
+                        fPos[i*3] = flowPos[i*3];
+                        fPos[i*3+1] = flowPos[i*3+1];
+                        fPos[i*3+2] = flowPos[i*3+2];
+                        fLife[i] = flowLife[i];
+                    } else {
+                        fPos[i*3] = x;
+                        fPos[i*3+1] = y;
+                        fPos[i*3+2] = z;
+                    }
+                }
+                flowSystem.geometry.attributes.position.needsUpdate = true;
+            }
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // Handle Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Start
+        animate();
+    </script>
+</body>
+</html>
